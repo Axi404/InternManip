@@ -93,6 +93,84 @@ python -m scripts.eval.start_evaluator \
 ```
 ▶ **Output logs in Method 2** : Check `./results/server.log` and `./results/eval.log`
 
+### Integrating a Custom Model for Inference in Internmanip
+
+To integrate a custom model into the **Internmanip** framework, you need to complete the following tasks:
+
+1. **Interface Adaptation**
+
+   * Correctly parse the input data provided by the simulation environment.
+   * Generate control commands in the required output format.
+2. **Inference Execution**
+
+   * Call your model within the `step` function to perform inference and return results.
+   * The server will execute the simulation based on your outputs and return the next-step observation.
+
+#### 1. `step` Function Input
+
+The `step` function in `internmanip/agent/genmanip_agent.py` receives a **list of length 1**, whose sole element is a Python `dict` containing the full robot state and sensor data.
+The complete field structure is described in the [Aloha Split Input Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split).
+
+Commonly used fields include:
+
+* **Joint Positions**
+
+  ```python
+  inputs[0]["robot"]["joints_state"]["positions"]
+  ```
+
+  The Aloha robot has **28 degrees of freedom** (including the mobile base). If your model only requires the dual-arm joints, slice the array according to the documentation.
+
+* **RGB Camera Images**
+
+  ```python
+  inputs[0]["robot"]["sensors"]["top_camera"]["rgb"]
+  inputs[0]["robot"]["sensors"]["left_camera"]["rgb"]
+  inputs[0]["robot"]["sensors"]["right_camera"]["rgb"]
+  ```
+
+#### 2. `step` Function Output
+
+The return value must also be a **list of length 1**, containing a dictionary that conforms to one of the two output formats defined in the documentation.
+
+* All control signals are in **absolute pose**.
+* End-effector (EE) pose control is **relative to the base of the corresponding arm**, aligned with the training data.
+* If you require **relative pose control**, you must implement the coordinate transformation logic yourself.
+
+#### 3. Reusing the Default Implementation
+
+The repository provides a default `step` implementation supporting **history smoothing** and **relative joint position (relative qpos)** control (with absolute gripper control).
+
+If you wish to reuse it, see **line 77**:
+
+```python
+pred_actions = self.policy_model.inference(transformed_input)['action_pred'][0].cpu().float()
+```
+
+Here, `transformed_input` is a preprocessed dictionary. Common keys include:
+
+* `"video.left_view"` / `"video.right_view"` / `"video.top_view"` — three RGB camera views
+* `"state.arm_qpos"` — dual-arm joint positions
+* `"annotation.human.action.task_description"` — task description
+
+**Joint position index mapping** (after conversion):
+
+* Left arm: `12:18`
+* Left gripper: `18:20`
+* Right arm: `20:26`
+* Right gripper: `26:28`
+
+#### 4. Model Output Format: `pred_actions`
+
+The inference result `pred_actions` is a **NumPy array of length 14**, with the following layout:
+
+| Index Range | Meaning                                          |
+| ----------- | ------------------------------------------------ |
+| `0:6`       | Left arm relative qpos                           |
+| `6:12`      | Right arm relative qpos                          |
+| `12`        | Left gripper control (`1` = open, `-1` = close)  |
+| `13`        | Right gripper control (`1` = open, `-1` = close) |
+
 ### Critical Notes
 1. **Environment Parameters**  
    Refer to : [Evaluation Environment Configuration](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#evaluation-environment-configuration-parameters)  

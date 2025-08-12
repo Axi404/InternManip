@@ -93,83 +93,84 @@ python -m scripts.eval.start_evaluator \
 ```
 ▶ **Output logs in Method 2** : Check `./results/server.log` and `./results/eval.log`
 
-### Integrating a Custom Model for Inference in Internmanip
+### How to Integrate Your Custom Model for Inference in Internmanip
 
-To integrate a custom model into the **Internmanip** framework, you need to complete the following tasks:
+To run your own model in **Internmanip**, you mainly need to:
 
-1. **Interface Adaptation**
+* Receive the inputs from the environment in the expected format.
+* Run your model inference with those inputs.
+* Return outputs in the required format so the server can simulate and send back the next observation.
 
-   * Correctly parse the input data provided by the simulation environment.
-   * Generate control commands in the required output format.
-2. **Inference Execution**
+#### 1. Input to the `step` Function
 
-   * Call your model within the `step` function to perform inference and return results.
-   * The server will execute the simulation based on your outputs and return the next-step observation.
+The core integration point is the `step` function located in `internmanip/agent/genmanip_agent.py`. It receives a **list with one element**, which is a Python dictionary containing robot state and sensor data. The complete field structure is described in the [Aloha Split Input Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split).
 
-#### 1. `step` Function Input
-
-The `step` function in `internmanip/agent/genmanip_agent.py` receives a **list of length 1**, whose sole element is a Python `dict` containing the full robot state and sensor data.
-The complete field structure is described in the [Aloha Split Input Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split).
-
-Commonly used fields include:
-
-* **Joint Positions**
-
-  ```python
-  inputs[0]["robot"]["joints_state"]["positions"]
-  ```
-
-  The Aloha robot has **28 degrees of freedom** (including the mobile base). If your model only requires the dual-arm joints, slice the array according to the documentation.
-
-* **RGB Camera Images**
-
-  ```python
-  inputs[0]["robot"]["sensors"]["top_camera"]["rgb"]
-  inputs[0]["robot"]["sensors"]["left_camera"]["rgb"]
-  inputs[0]["robot"]["sensors"]["right_camera"]["rgb"]
-  ```
-
-#### 2. `step` Function Output
-
-The return value must also be a **list of length 1**, containing a dictionary that conforms to one of the two output formats defined in the documentation.
-
-* All control signals are in **absolute pose**.
-* End-effector (EE) pose control is **relative to the base of the corresponding arm**, aligned with the training data.
-* If you require **relative pose control**, you must implement the coordinate transformation logic yourself.
-
-#### 3. Reusing the Default Implementation
-
-The repository provides a default `step` implementation supporting **history smoothing** and **relative joint position (relative qpos)** control (with absolute gripper control).
-
-If you wish to reuse it, see **line 77**:
+Here is an example of how you might access inputs inside this function:
 
 ```python
-pred_actions = self.policy_model.inference(transformed_input)['action_pred'][0].cpu().float()
+def step(self, inputs):
+  # inputs is a list with one dict
+  input_data = inputs[0]
+  # Get the joint positions (28 DOF including the base)
+  joint_positions = input_data["robot"]["joints_state"]["positions"]
+  # joint indices follow the official docs
+  left_arm_qpos = joint_positions[[12, 14, 16, 18, 20, 22]]
+  right_arm_qpos = joint_positions[[13, 15, 17, 19, 21, 23]]
+  left_gripper_qpos = joint_positions[[24, 25]]
+  right_gripper_qpos = joint_positions[[26, 27]]
+  # Get RGB images from the three cameras
+  left_rgb = input_data["robot"]["sensors"]["left_camera"]["rgb"]
+  right_rgb = input_data["robot"]["sensors"]["right_camera"]["rgb"]
+  top_rgb = input_data["robot"]["sensors"]["top_camera"]["rgb"]
+  # Get the task description instruction
+  instruction = input_data["annotation"]["human"]["action"]["task_description"]
+  # Prepare your model input here (e.g., packaging images, qpos, and instruction)
+  model_input = {
+      "left_rgb": left_rgb,
+      "right_rgb": right_rgb,
+      "top_rgb": top_rgb,
+      "left_arm_qpos": left_arm_qpos,
+      "right_arm_qpos": right_arm_qpos,
+      "left_gripper_qpos": left_gripper_qpos,
+      "right_gripper_qpos": right_gripper_qpos,
+      "instruction": instruction,
+  }
 ```
 
-Here, `transformed_input` is a preprocessed dictionary. Common keys include:
+#### 2. Running Model Inference
 
-* `"video.left_view"` / `"video.right_view"` / `"video.top_view"` — three RGB camera views
-* `"state.arm_qpos"` — dual-arm joint positions
-* `"annotation.human.action.task_description"` — task description
+Use your model to run inference on the processed inputs, for example:
 
-**Joint position index mapping** (after conversion):
+```python
+pred_actions = self.policy_model.inference(model_input)['action_pred'][0].cpu().numpy()
+```
 
-* Left arm: `12:18`
-* Left gripper: `18:20`
-* Right arm: `20:26`
-* Right gripper: `26:28`
+#### 3. Return Output from `step`
 
-#### 4. Model Output Format: `pred_actions`
+Finally, package your output into the required format: a list containing one dictionary, for example:
 
-The inference result `pred_actions` is a **NumPy array of length 14**, with the following layout:
+```python
+def step(self, inputs):
+  ...
+  output = [{
+      "action": {
+        'left_arm_action': pred_actions[:6], # (6,)
+        # Scale from [0,1] to [-1,1], where 1=open and -1=close
+        'left_gripper_action': [pred_actions[12] * 2 - 1] * 2, # (2,) || -1 or 1 -> open or close
+        'right_arm_action': pred_actions[6:12], # (6,)
+        'right_gripper_action': [pred_actions[13] * 2 - 1] * 2, # (2,) || -1 or 1 -> open or close
+    },
+  }]
+  return output
+```
 
-| Index Range | Meaning                                          |
-| ----------- | ------------------------------------------------ |
-| `0:6`       | Left arm relative qpos                           |
-| `6:12`      | Right arm relative qpos                          |
-| `12`        | Left gripper control (`1` = open, `-1` = close)  |
-| `13`        | Right gripper control (`1` = open, `-1` = close) |
+#### Notes:
+
+* All joint positions and actions are expressed as absolute joint positions (absolute qpos) or absolute end-effector pose (absolute eepose) with respect to each arm base frame. If you want to control relative poses, you need to convert it to absolute control yourself.
+* The `step` function and input/output formats are described in detail here:
+  [Aloha Split Input/Output Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split)
+
+Currently, the codebase includes an example step implementation that supports smoothing and outputs relative joint positions. You can refer to it or reuse it directly in your development.
 
 ### Critical Notes
 1. **Environment Parameters**  

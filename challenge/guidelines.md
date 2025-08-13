@@ -242,7 +242,7 @@ Create your custom evaluation configuration file based on the structure of:
 You can refer to the existing `gr00t_n1_5_on_genmanip.py` as an example.
 
 
-### 2. Start Evaluation
+#### 2. Start Evaluation
 There are two ways to start the evaluation:
 
 **Approach 1️⃣: Start separately in manual**  

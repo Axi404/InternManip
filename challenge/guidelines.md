@@ -53,45 +53,6 @@ docker run --name internmanip -it --rm --gpus all --network host \
   
 
 
-## 🛠️ Evaluate Your Policy Locally
-  
-### 1. Configuration File Preparation  
-Create your custom configuration file. An example is provided in `challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py`.
-
-
-### 2. Evaluation
-There are two ways to start the evaluation:
-
-**Approach 1️⃣: Start separately in manual**  
-1. Open the terminal and start the agent server:  
-```bash
-conda activate your_agent_env_name
-python -m scripts.eval.start_agent_server --host localhost --port 5000
-```
-2. Open another terminal and start the evaluator:
-```bash
-conda activate genmanip
-python -m scripts.eval.start_evaluator \
-  --config challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py \
-  --server
-```
-
-
-We also provide a bash script to launch the agent server and evaluator in one command.
-
-**Approach 2️⃣: Start in one command**  
-```bash
-./challenge/bash_scripts/eval.sh \
-  --server_conda_name your_agent_env_name \
-  --config challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py \
-  --server \
-  --dataset_path ./data/dataset \
-  --res_save_path ./results
-```
-You can check the results at `./results/server.log` and `./results/eval.log`.
-
-
-
 ## 🤖 Observation Space & Action Space
 To drive the robot with your policy, you need to train your policy model and implement the agent, especially the member function `step` (refer to [`internmanip/agent/genmanip_agent.py`](https://github.com/InternRobotics/InternManip/blob/master/internmanip/agent/genmanip_agent.py#L52) for an example). Here, we clarify the observation space and action space for the agent in this challenge to facilitate your agent design.
 
@@ -100,7 +61,7 @@ To drive the robot with your policy, you need to train your policy model and imp
 At every step, the environment sends your agent a **list with one element** – a nested dictionary `obs` summarising the current observation.
 
 ```python
-obs = {
+obs = [{
     "robot": {
         "robot_pose": (np.ndarray, np.ndarray),          # (pos, quat) base in world
         "joints_state": {
@@ -125,10 +86,10 @@ obs = {
         "step": int,
         "render": bool
     }
-}
+}]
 ```
 
-The joint indices for `aloha_split` (28-DOF) are summarized in the following table.
+The joint indices for `aloha_split` (28-DOF) robot are summarized in the following table.
 
 | Index range | Component          |
 |-------------|--------------------|
@@ -208,6 +169,45 @@ That’s it – Internmanip handles the rest (simulation, camera feeds, metrics 
 
 2. **I/O Specifications**  
    For GenManip environment data formats and action schemas: [I/O Documentation](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split)
+
+
+## 🛠️ Evaluate Your Policy Locally
+  
+### 1. Configuration File Preparation  
+Create your custom configuration file. An example is provided in `challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py`.
+
+
+### 2. Evaluation
+There are two ways to start the evaluation:
+
+**Approach 1️⃣: Start separately in manual**  
+1. Open the terminal and start the agent server:  
+```bash
+conda activate your_agent_env_name
+python -m scripts.eval.start_agent_server --host localhost --port 5000
+```
+2. Open another terminal and start the evaluator:
+```bash
+conda activate genmanip
+python -m scripts.eval.start_evaluator \
+  --config challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py \
+  --server
+```
+
+
+We also provide a bash script to launch the agent server and evaluator in one command.
+
+**Approach 2️⃣: Start in one command**  
+```bash
+./challenge/bash_scripts/eval.sh \
+  --server_conda_name your_agent_env_name \
+  --config challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py \
+  --server \
+  --dataset_path ./data/dataset \
+  --res_save_path ./results
+```
+You can check the results at `./results/server.log` and `./results/eval.log`.
+
 
 ## 📦 Packaging & Submission
 

@@ -53,28 +53,22 @@ docker run --name internmanip -it --rm --gpus all --network host \
   
 
 
-## 🛠️ Local Development & Testing
+## 🛠️ Evaluate Your Policy Locally
   
-### Implement your policy  
-- Implement your policy under `internmanip/agent` and `internmanip/model`.
-  
----  
-  
-### Test  
-#### 1. Configuration File Preparation  
-Create your custom configuration file by replicating the structure of: 
-`challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py`
+### 1. Configuration File Preparation  
+Create your custom configuration file. An example is provided in `challenge/run_configs/eval/gr00t_n1_5_on_genmanip.py`.
 
 
-#### 2. Evaluation Methods (Choose One)  
-**Method 1: Dual-Terminal Approach**  
-Terminal 1 (Agent Server):  
+### 2. Evaluation
+There are two ways to start the evaluation:
+
+**Approach 1️⃣: Start separately in manual**  
+1. Open the terminal and start the agent server:  
 ```bash
 conda activate your_agent_env_name
 python -m scripts.eval.start_agent_server --host localhost --port 5000
 ```
-
-Terminal 2 (Evaluator):  
+2. Open another terminal and start the evaluator:
 ```bash
 conda activate genmanip
 python -m scripts.eval.start_evaluator \
@@ -82,7 +76,10 @@ python -m scripts.eval.start_evaluator \
   --server
 ```
 
-**Method 2: Single-Command Approach**  
+
+We also provide a bash script to launch the agent server and evaluator in one command.
+
+**Approach 2️⃣: Start in one command**  
 ```bash
 ./challenge/bash_scripts/eval.sh \
   --server_conda_name your_agent_env_name \
@@ -91,88 +88,120 @@ python -m scripts.eval.start_evaluator \
   --dataset_path ./data/dataset \
   --res_save_path ./results
 ```
-▶ **Output logs in Method 2** : Check `./results/server.log` and `./results/eval.log`
+You can check the results at `./results/server.log` and `./results/eval.log`.
 
-### How to Integrate Your Custom Model for Inference in Internmanip
 
-To run your own model in **Internmanip**, you mainly need to:
 
-* Receive the inputs from the environment in the expected format.
-* Run your model inference with those inputs.
-* Return outputs in the required format so the server can simulate and send back the next observation.
+## 🤖 Observation Space & Action Space
+To drive the robot with your policy, you need to train your policy model and implement the agent, especially the member function `step` (refer to [`internmanip/agent/genmanip_agent.py`](https://github.com/InternRobotics/InternManip/blob/master/internmanip/agent/genmanip_agent.py#L52) for an example). Here, we clarify the observation space and action space for the agent in this challenge to facilitate your agent design.
 
-#### 1. Input to the `step` Function
+### Observation
 
-The core integration point is the `step` function located in `internmanip/agent/genmanip_agent.py`. It receives a **list with one element**, which is a Python dictionary containing robot state and sensor data. The complete field structure is described in the [Aloha Split Input Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split).
-
-Here is an example of how you might access inputs inside this function:
+At every step, the environment sends your agent a **list with one element** – a nested dictionary `obs` summarising the current observation.
 
 ```python
-def step(self, inputs):
-  # inputs is a list with one dict
-  input_data = inputs[0]
-  # Get the joint positions (28 DOF including the base)
-  joint_positions = input_data["robot"]["joints_state"]["positions"]
-  # joint indices follow the official docs
-  left_arm_qpos = joint_positions[[12, 14, 16, 18, 20, 22]]
-  right_arm_qpos = joint_positions[[13, 15, 17, 19, 21, 23]]
-  left_gripper_qpos = joint_positions[[24, 25]]
-  right_gripper_qpos = joint_positions[[26, 27]]
-  # Get RGB images from the three cameras
-  left_rgb = input_data["robot"]["sensors"]["left_camera"]["rgb"]
-  right_rgb = input_data["robot"]["sensors"]["right_camera"]["rgb"]
-  top_rgb = input_data["robot"]["sensors"]["top_camera"]["rgb"]
-  # Get the task description instruction
-  instruction = input_data["annotation"]["human"]["action"]["task_description"]
-  # Prepare your model input here (e.g., packaging images, qpos, and instruction)
-  model_input = {
-      "left_rgb": left_rgb,
-      "right_rgb": right_rgb,
-      "top_rgb": top_rgb,
-      "left_arm_qpos": left_arm_qpos,
-      "right_arm_qpos": right_arm_qpos,
-      "left_gripper_qpos": left_gripper_qpos,
-      "right_gripper_qpos": right_gripper_qpos,
-      "instruction": instruction,
-  }
+obs = {
+    "robot": {
+        "robot_pose": (np.ndarray, np.ndarray),          # (pos, quat) base in world
+        "joints_state": {
+            "positions": np.ndarray,                     # (28,)  see DOF table below
+            "velocities": np.ndarray                     # (28,)
+        },
+        "left_eef_pose":  (np.ndarray, np.ndarray),      # 7-D left gripper pose
+        "right_eef_pose": (np.ndarray, np.ndarray),      # 7-D right gripper pose
+        "sensors": {
+            "top_camera":   {"rgb": np.ndarray, "depth": np.ndarray},   # (480,640,3) & (480,640)
+            "left_camera":  {"rgb": np.ndarray, "depth": np.ndarray},
+            "right_camera": {"rgb": np.ndarray, "depth": np.ndarray},
+        },
+        "instruction": str,                              # natural-language task prompt
+        "metric": {
+            "task_name": str,
+            "episode_name": str,
+            "episode_sr": int,
+            "first_success_step": int,
+            "episode_step": int
+        },
+        "step": int,
+        "render": bool
+    }
+}
 ```
 
-#### 2. Running Model Inference
+The joint indices for `aloha_split` (28-DOF) are summarized in the following table.
 
-Use your model to run inference on the processed inputs, for example:
+| Index range | Component          |
+|-------------|--------------------|
+| 0-11        | **mobile base + lift** |
+| 12,14,16,18,20,22 | **left arm** |
+| 24,25       | **left gripper**   |
+| 13,15,17,19,21,23 | **right arm** |
+| 26,27       | **right gripper**  |
+
+That is to say, you can extract arm/gripper joint states like this:
 
 ```python
-pred_actions = self.policy_model.inference(model_input)['action_pred'][0].cpu().numpy()
+q = obs["robot"]["joints_state"]["positions"]
+left_arm_qpos   = q[[12,14,16,18,20,22]]
+right_arm_qpos  = q[[13,15,17,19,21,23]]
+left_gripper_q  = q[[24,25]]
+right_gripper_q = q[[26,27]]
 ```
 
-#### 3. Return Output from `step`
+---
 
-Finally, package your output into the required format: a list containing one dictionary, for example:
+### Action Space
+
+Your `step` method must return a **list with one dictionary** that specifies the next command for both arms.
+
+Supported formats:
+
+#### Format 1 – joint commands (recommended)
 
 ```python
-def step(self, inputs):
-  ...
-  output = [{
-      "action": {
-        'left_arm_action': pred_actions[:6], # (6,)
-        # Scale from [0,1] to [-1,1], where 1=open and -1=close
-        'left_gripper_action': [pred_actions[12] * 2 - 1] * 2, # (2,) || -1 or 1 -> open or close
-        'right_arm_action': pred_actions[6:12], # (6,)
-        'right_gripper_action': [pred_actions[13] * 2 - 1] * 2, # (2,) || -1 or 1 -> open or close
-    },
-  }]
-  return output
+action = [{
+    "action": {
+        "left_arm_action":    np.ndarray,  # (6,)  joint deltas or positions
+        "left_gripper_action": float or [float,float],  # -1=close, 1=open
+        "right_arm_action":   np.ndarray,  # (6,)
+        "right_gripper_action": float or [float,float],
+    }
+}]
 ```
 
-#### Notes:
+#### Format 2 – end-effector pose commands (optional)
 
-* All joint positions and actions are expressed as absolute joint positions (absolute qpos) or absolute end-effector pose (absolute eepose) with respect to each arm base frame. If you want to control relative poses, you need to convert it to absolute control yourself.
-* The `step` function and input/output formats are described in detail here:
-  [Aloha Split Input/Output Format](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#when-robote-type-is-aloha-split)
+```python
+action = [{
+    "action": {
+        "left_eef_position":    np.ndarray,  # (3,)  x,y,z
+        "left_eef_orientation": np.ndarray,  # (4,)  quaternion (w,x,y,z)
+        "left_gripper_action":  float or [float,float],
+        "right_eef_position":   np.ndarray,
+        "right_eef_orientation": np.ndarray,
+        "right_gripper_action": float or [float,float],
+    }
+}]
+```
 
-Currently, the codebase includes an example step implementation that supports smoothing and outputs relative joint positions. You can refer to it or reuse it directly in your development.
+Return the list:
 
-### Critical Notes
+```python
+return action
+```
+
+---
+
+### Quick Integration Checklist
+
+1. Edit `internmanip/agent/genmanip_agent.py` → implement `step(self, inputs)`.
+2. Parse the observation as shown above.
+3. Run your model and map the raw outputs to the required action dict.
+4. Return the action list.
+
+That’s it – Internmanip handles the rest (simulation, camera feeds, metrics logging).
+
+#### Critical Notes
 1. **Environment Parameters**  
    Refer to : [Evaluation Environment Configuration](https://internrobotics.github.io/user_guide/internmanip/tutorials/environment.html#evaluation-environment-configuration-parameters)  
    **Mandatory**: `robot_type` must be set to `aloha_split` for this challenge.
